@@ -1,13 +1,19 @@
 pipeline {
     agent any
     
+    options {
+        timeout(time: 20, unit: 'MINUTES')  // Global timeout to prevent indefinite hangs
+        retry(1)  // Retry failed builds once
+        skipDefaultCheckout()
+    }
+    
     environment {
         NODE_VERSION = '18'
         APP_NAME = 'group6-react-app'
         SONAR_URL = 'http://localhost:9000'
         TOMCAT_URL = 'http://localhost:8083'
         KIBANA_URL = 'http://localhost:8443'
-        PUBLIC_IP = sh(script: 'curl -s http://169.254.169.254/latest/meta-data/public-ipv4', returnStdout: true).trim()
+        PUBLIC_IP = sh(script: 'timeout 10 curl -s http://169.254.169.254/latest/meta-data/public-ipv4 || echo "unknown"', returnStdout: true).trim()
     }
     
     stages {
@@ -20,46 +26,60 @@ pipeline {
         
         stage('Setup Node.js') {
             steps {
-                echo '🔧 Setting up Node.js environment...'
-                sh '''
-                    # Install Node.js 18 if not available
-                    if ! command -v node &> /dev/null || [[ $(node --version) != v18* ]]; then
-                        curl -fsSL https://rpm.nodesource.com/setup_18.x | sudo bash -
-                        sudo yum install -y nodejs
-                    fi
-                    
-                    echo "Node.js version: $(node --version)"
-                    echo "NPM version: $(npm --version)"
-                '''
+                timeout(time: 5, unit: 'MINUTES') {
+                    echo '🔧 Setting up Node.js environment...'
+                    sh '''
+                        # Install Node.js 18 if not available
+                        if ! command -v node &> /dev/null || [[ $(node --version) != v18* ]]; then
+                            timeout 300 curl -fsSL https://rpm.nodesource.com/setup_18.x | sudo bash -
+                            sudo timeout 300 yum install -y nodejs
+                        fi
+                        
+                        echo "Node.js version: $(node --version)"
+                        echo "NPM version: $(npm --version)"
+                    '''
+                }
             }
         }
         
         stage('Install Dependencies') {
             steps {
-                echo '📦 Installing npm dependencies...'
-                sh '''
-                    npm ci --prefer-offline
-                    echo "Dependencies installed successfully"
-                '''
+                timeout(time: 10, unit: 'MINUTES') {
+                    echo '📦 Installing npm dependencies...'
+                    sh '''
+                        # Set npm timeout to prevent hanging
+                        npm config set fetch-timeout 300000
+                        npm config set fetch-retries 3
+                        
+                        # Try npm ci first, fallback to npm install
+                        timeout 600 npm ci --prefer-offline || timeout 600 npm install
+                        echo "Dependencies installed successfully"
+                    '''
+                }
             }
         }
         
         stage('Build') {
             steps {
-                echo '🏗️ Building React application...'
-                sh '''
-                    npm run build
-                    echo "Build completed at $(date)"
-                    
-                    # Verify build output
-                    if [ -d "build" ]; then
-                        echo "✅ Build directory created successfully"
-                        ls -la build/
-                    else
-                        echo "❌ Build failed - no build directory found"
-                        exit 1
-                    fi
-                '''
+                timeout(time: 10, unit: 'MINUTES') {
+                    echo '🏗️ Building React application...'
+                    sh '''
+                        # Set memory limit for Node.js
+                        export NODE_OPTIONS="--max-old-space-size=2048"
+                        
+                        timeout 600 npm run build
+                        echo "Build completed at $(date)"
+                        
+                        # Verify build output
+                        if [ -d "build" ]; then
+                            echo "✅ Build directory created successfully"
+                            ls -la build/ | head -20  # Limit output
+                        else
+                            echo "❌ Build failed - no build directory found"
+                            exit 1
+                        fi
+                    '''
+                }
             }
             post {
                 success {
@@ -92,74 +112,74 @@ pipeline {
         
         stage('Quality Analysis') {
             steps {
-                echo '🔍 Running SonarQube analysis...'
-                sh '''
-                    echo "🔍 Starting SonarQube analysis with Docker..."
-                    
-                    # Check available scanner options
-                    if [ -f "/usr/local/bin/sonar-scanner-docker" ]; then
-                        echo "✅ SonarQube Scanner Docker wrapper found"
-                        SCANNER_CMD="/usr/local/bin/sonar-scanner-docker"
-                        SCANNER_TYPE="Docker"
-                    elif command -v npx >/dev/null 2>&1 && npm list -g sonar-scanner >/dev/null 2>&1; then
-                        echo "✅ SonarQube Scanner NPM found"
-                        SCANNER_CMD="npx sonar-scanner"
-                        SCANNER_TYPE="NPM"
-                    else
-                        echo "⚠️ Installing SonarQube Scanner via NPM..."
-                        npm install -g sonar-scanner
-                        SCANNER_CMD="npx sonar-scanner"
-                        SCANNER_TYPE="NPM (installed)"
-                    fi
-                    
-                    echo "📊 Using scanner: $SCANNER_TYPE"
-                    
-                    # Wait for SonarQube to be ready
-                    echo "Checking SonarQube availability..."
-                    for i in {1..6}; do
-                        if curl -s http://localhost:9000/api/system/status | grep -q "UP"; then
-                            echo "✅ SonarQube is ready"
-                            SONAR_READY=true
-                            break
+                timeout(time: 8, unit: 'MINUTES') {
+                    echo '🔍 Running SonarQube analysis...'
+                    sh '''
+                        echo "🔍 Starting SonarQube analysis with timeouts..."
+                        
+                        # Check available scanner options with timeout
+                        if [ -f "/usr/local/bin/sonar-scanner-docker" ]; then
+                            echo "✅ SonarQube Scanner Docker wrapper found"
+                            SCANNER_CMD="/usr/local/bin/sonar-scanner-docker"
+                            SCANNER_TYPE="Docker"
+                        elif command -v npx >/dev/null 2>&1 && timeout 30 npm list -g sonar-scanner >/dev/null 2>&1; then
+                            echo "✅ SonarQube Scanner NPM found"
+                            SCANNER_CMD="npx sonar-scanner"
+                            SCANNER_TYPE="NPM"
                         else
-                            echo "⏳ Waiting for SonarQube... (attempt $i/6)"
-                            sleep 15
+                            echo "⚠️ Installing SonarQube Scanner via NPM..."
+                            timeout 180 npm install -g sonar-scanner
+                            SCANNER_CMD="npx sonar-scanner"
+                            SCANNER_TYPE="NPM (installed)"
                         fi
-                    done
-                    
-                    if [ "$SONAR_READY" != "true" ]; then
-                        echo "⚠️ SonarQube not responding, running analysis anyway..."
-                    fi
-                    
-                    # Create coverage directory if it doesn't exist
-                    mkdir -p coverage
-                    
-                    # Set SonarQube host URL for Docker scanner
-                    export SONAR_HOST_URL="http://localhost:9000"
-                    
-                    # Run SonarQube analysis
-                    echo "🚀 Running SonarQube analysis using $SCANNER_TYPE..."
-                    
-                    if [ "$SCANNER_TYPE" = "Docker" ]; then
-                        # Use Docker scanner with network host mode for localhost access
-                        $SCANNER_CMD \\
-                            -Dsonar.host.url=http://localhost:9000 \\
-                            -Dsonar.login=admin \\
-                            -Dsonar.password=admin \\
-                            -Dsonar.projectBaseDir=. \\
-                            -Dsonar.working.directory=.sonarqube || echo "✅ Docker SonarQube analysis completed"
-                    else
-                        # Use NPM scanner
-                        $SCANNER_CMD \\
-                            -Dsonar.host.url=http://localhost:9000 \\
-                            -Dsonar.login=admin \\
-                            -Dsonar.password=admin \\
-                            -Dsonar.projectBaseDir=. || echo "✅ NPM SonarQube analysis completed"
-                    fi
-                    
-                    echo "📊 SonarQube analysis finished using $SCANNER_TYPE"
-                    echo "🔗 View results at: http://localhost:9000/dashboard?id=group6-react-app"
-                '''
+                        
+                        echo "📊 Using scanner: $SCANNER_TYPE"
+                        
+                        # Quick SonarQube availability check with shorter timeout
+                        echo "Checking SonarQube availability..."
+                        SONAR_READY=false
+                        for i in {1..3}; do
+                            if timeout 10 curl -s http://localhost:9000/api/system/status | grep -q "UP"; then
+                                echo "✅ SonarQube is ready"
+                                SONAR_READY=true
+                                break
+                            else
+                                echo "⏳ Waiting for SonarQube... (attempt $i/3)"
+                                sleep 10
+                            fi
+                        done
+                        
+                        if [ "$SONAR_READY" != "true" ]; then
+                            echo "⚠️ SonarQube not responding, skipping analysis..."
+                            exit 0
+                        fi
+                        
+                        # Create coverage directory if it doesn't exist
+                        mkdir -p coverage
+                        
+                        # Run SonarQube analysis with timeout
+                        echo "🚀 Running SonarQube analysis using $SCANNER_TYPE..."
+                        
+                        if [ "$SCANNER_TYPE" = "Docker" ]; then
+                            # Use Docker scanner with timeout
+                            timeout 300 $SCANNER_CMD \\
+                                -Dsonar.host.url=http://localhost:9000 \\
+                                -Dsonar.login=admin \\
+                                -Dsonar.password=admin \\
+                                -Dsonar.projectBaseDir=. \\
+                                -Dsonar.working.directory=.sonarqube || echo "✅ Docker SonarQube analysis completed"
+                        else
+                            # Use NPM scanner with timeout
+                            timeout 300 $SCANNER_CMD \\
+                                -Dsonar.host.url=http://localhost:9000 \\
+                                -Dsonar.login=admin \\
+                                -Dsonar.password=admin \\
+                                -Dsonar.projectBaseDir=. || echo "✅ NPM SonarQube analysis completed"
+                        fi
+                        
+                        echo "📊 SonarQube analysis finished"
+                    '''
+                }
             }
         }
         
@@ -181,51 +201,56 @@ pipeline {
         
         stage('Deploy to Tomcat') {
             steps {
-                echo '🚀 Deploying to Tomcat...'
-                sh '''
-                    # Wait for Tomcat to be ready
-                    echo "Checking Tomcat availability..."
-                    timeout 30 bash -c 'until curl -s http://localhost:8083 > /dev/null; do sleep 2; done' || echo "Tomcat check completed"
-                    
-                    # Deploy to Tomcat webapps directory
-                    sudo rm -rf /opt/tomcat/webapps/${APP_NAME}
-                    sudo rm -f /opt/tomcat/webapps/${APP_NAME}.war
-                    
-                    # Copy build files to Tomcat
-                    sudo cp -r build /opt/tomcat/webapps/${APP_NAME}
-                    sudo chown -R tomcat:tomcat /opt/tomcat/webapps/${APP_NAME}
-                    
-                    echo "✅ Application deployed to Tomcat"
-                    echo "🌐 Application URL: http://${PUBLIC_IP}:8083/${APP_NAME}"
-                '''
+                timeout(time: 3, unit: 'MINUTES') {
+                    echo '🚀 Deploying to Tomcat...'
+                    sh '''
+                        # Wait for Tomcat to be ready with shorter timeout
+                        echo "Checking Tomcat availability..."
+                        timeout 20 bash -c 'until curl -s http://localhost:8083 > /dev/null; do sleep 2; done' || echo "Tomcat check completed"
+                        
+                        # Deploy to Tomcat webapps directory
+                        sudo rm -rf /opt/tomcat/webapps/${APP_NAME}
+                        sudo rm -f /opt/tomcat/webapps/${APP_NAME}.war
+                        
+                        # Copy build files to Tomcat
+                        sudo cp -r build /opt/tomcat/webapps/${APP_NAME}
+                        sudo chown -R tomcat:tomcat /opt/tomcat/webapps/${APP_NAME}
+                        
+                        echo "✅ Application deployed to Tomcat"
+                        echo "🌐 Application URL: http://${PUBLIC_IP}:8083/${APP_NAME}"
+                    '''
+                }
+            }
             }
         }
         
         stage('Health Check') {
             steps {
-                echo '🏥 Performing deployment health check...'
-                sh '''
-                    # Wait a moment for deployment
-                    sleep 10
-                    
-                    # Check if application is accessible
-                    if curl -s -o /dev/null -w "%{http_code}" http://localhost:8083/${APP_NAME} | grep -q "200"; then
-                        echo "✅ Application is healthy and accessible"
-                        echo "🎉 Deployment successful!"
-                    else
-                        echo "⚠️ Application may not be fully ready yet, but deployment completed"
-                    fi
-                    
-                    # Display deployment info
-                    echo ""
-                    echo "=== DEPLOYMENT SUMMARY ==="
-                    echo "Application: ${APP_NAME}"
-                    echo "Build Number: ${BUILD_NUMBER}"
-                    echo "Public URL: http://${PUBLIC_IP}:8083/${APP_NAME}"
-                    echo "SonarQube: http://${PUBLIC_IP}:9000"
-                    echo "Jenkins: http://${PUBLIC_IP}:8081"
-                    echo "=========================="
-                '''
+                timeout(time: 2, unit: 'MINUTES') {
+                    echo '🏥 Performing deployment health check...'
+                    sh '''
+                        # Wait a moment for deployment
+                        sleep 10
+                        
+                        # Check if application is accessible with timeout
+                        if timeout 15 curl -s -o /dev/null -w "%{http_code}" http://localhost:8083/${APP_NAME} | grep -q "200"; then
+                            echo "✅ Application is healthy and accessible"
+                            echo "🎉 Deployment successful!"
+                        else
+                            echo "⚠️ Application may not be fully ready yet, but deployment completed"
+                        fi
+                        
+                        # Display deployment info
+                        echo ""
+                        echo "=== DEPLOYMENT SUMMARY ==="
+                        echo "Application: ${APP_NAME}"
+                        echo "Build Number: ${BUILD_NUMBER}"
+                        echo "Public URL: http://${PUBLIC_IP}:8083/${APP_NAME}"
+                        echo "SonarQube: http://${PUBLIC_IP}:9000"
+                        echo "Jenkins: http://${PUBLIC_IP}:8080"
+                        echo "=========================="
+                    '''
+                }
             }
         }
     }

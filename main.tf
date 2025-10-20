@@ -525,3 +525,94 @@ output "elasticsearch_url" {
   description = "Elasticsearch URL"
   value       = "http://${aws_instance.devops_instance.public_ip}:10100"
 }
+
+# Credentials Output
+output "jenkins_credentials" {
+  description = "Jenkins login credentials"
+  value = {
+    url      = "http://${aws_instance.devops_instance.public_ip}:8080"
+    username = "admin"
+    password = "Check Jenkins container: docker exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword"
+    note     = "Jenkins auto-generates a password. SSH to instance and run the command above to get it."
+  }
+  sensitive = false
+}
+
+output "sonarqube_credentials" {
+  description = "SonarQube login credentials"
+  value = {
+    url      = "http://${aws_instance.devops_instance.public_ip}:9000"
+    username = "admin"
+    password = "admin"
+    note     = "Default SonarQube credentials. Change password after first login."
+  }
+  sensitive = false
+}
+
+output "kibana_credentials" {
+  description = "Kibana login credentials"
+  value = {
+    url      = "http://${aws_instance.devops_instance.public_ip}:10101"
+    username = "elastic"
+    password = "changeme"
+    note     = "Default Elasticsearch/Kibana credentials configured in ELK stack."
+  }
+  sensitive = false
+}
+
+output "elasticsearch_credentials" {
+  description = "Elasticsearch login credentials"
+  value = {
+    url      = "http://${aws_instance.devops_instance.public_ip}:10100"
+    username = "elastic"
+    password = "changeme"
+    note     = "Default Elasticsearch credentials. Same as Kibana."
+  }
+  sensitive = false
+}
+
+output "deployment_summary" {
+  description = "Complete deployment summary with all access information"
+  value = {
+    infrastructure = {
+      instance_id = aws_instance.devops_instance.id
+      public_ip   = aws_instance.devops_instance.public_ip
+      private_ip  = aws_instance.devops_instance.private_ip
+      region      = var.region
+    }
+    services = {
+      jenkins = {
+        url      = "http://${aws_instance.devops_instance.public_ip}:8080"
+        username = "admin"
+        password = "auto-generated (see jenkins_credentials output)"
+      }
+      sonarqube = {
+        url      = "http://${aws_instance.devops_instance.public_ip}:9000"
+        username = "admin"
+        password = "admin"
+      }
+      kibana = {
+        url      = "http://${aws_instance.devops_instance.public_ip}:10101"
+        username = "elastic"
+        password = "changeme"
+      }
+      elasticsearch = {
+        url      = "http://${aws_instance.devops_instance.public_ip}:10100"
+        username = "elastic"
+        password = "changeme"
+      }
+      tomcat = {
+        url  = "http://${aws_instance.devops_instance.public_ip}:8081"
+        note = "No authentication required for Tomcat web interface"
+      }
+    }
+    next_steps = [
+      "1. Access Jenkins and change the auto-generated password",
+      "2. Access SonarQube and change default admin password",
+      "3. Access Kibana and configure Elasticsearch indices",
+      "4. Deploy your applications to Tomcat via Jenkins pipeline",
+      "5. Monitor logs and metrics through ELK stack"
+    ]
+  }
+  sensitive = false
+}
