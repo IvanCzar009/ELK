@@ -53,3 +53,17 @@ variable "allowed_cidr_blocks" {
   type        = list(string)
   default     = ["0.0.0.0/0"]
 }
+
+# Kibana Authentication Variables
+variable "kibana_username" {
+  description = "Username for Kibana authentication"
+  type        = string
+  default     = "kibana_admin"
+}
+
+variable "kibana_password" {
+  description = "Password for Kibana authentication"
+  type        = string
+  default     = "kibana123"
+  sensitive   = true
+}

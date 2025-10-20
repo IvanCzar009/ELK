@@ -92,6 +92,90 @@ while ! curl -s http://localhost:8080/login > /dev/null; do
   sleep 10
 done
 
+# Install Node.js in Jenkins container for React app builds
+echo "=== Installing Node.js in Jenkins Container ==="
+echo "Installing Node.js 18.x for React app builds..."
+docker exec -u 0 jenkins bash -c 'curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && apt-get install -y nodejs'
+
+# Verify Node.js installation
+echo "Verifying Node.js installation..."
+NODE_VERSION=$(docker exec jenkins node --version 2>/dev/null || echo "Not installed")
+NPM_VERSION=$(docker exec jenkins npm --version 2>/dev/null || echo "Not installed")
+echo "Node.js version: $NODE_VERSION"
+echo "npm version: $NPM_VERSION"
+
+if [[ "$NODE_VERSION" != "Not installed" ]]; then
+  echo "✅ Node.js successfully installed in Jenkins container"
+else
+  echo "❌ Node.js installation failed"
+fi
+
+# Install SonarQube Scanner for Jenkins container using Docker
+echo "=== Setting up SonarQube Scanner via Docker ==="
+echo "Pulling SonarQube Scanner Docker image..."
+
+# Pull the official SonarQube Scanner Docker image
+docker pull sonarsource/sonar-scanner-cli:latest
+
+# Verify the image is available
+if docker images | grep -q "sonarsource/sonar-scanner-cli"; then
+    echo "✅ SonarQube Scanner Docker image ready"
+    
+    # Create a script wrapper for easy scanner execution
+    docker exec jenkins mkdir -p /usr/local/bin
+    docker exec jenkins bash -c 'cat > /usr/local/bin/sonar-scanner-docker << '"'"'EOF'"'"'
+#!/bin/bash
+# SonarQube Scanner Docker wrapper
+# Usage: sonar-scanner-docker [sonar-scanner-arguments]
+
+WORKSPACE_DIR="${PWD}"
+SONAR_HOST_URL="${SONAR_HOST_URL:-http://host.docker.internal:9000}"
+
+echo "🔍 Running SonarQube Scanner via Docker..."
+echo "📁 Workspace: ${WORKSPACE_DIR}"
+echo "🌐 SonarQube URL: ${SONAR_HOST_URL}"
+
+docker run --rm \
+    --network="host" \
+    -v "${WORKSPACE_DIR}:/usr/src" \
+    -w /usr/src \
+    sonarsource/sonar-scanner-cli:latest "$@"
+EOF'
+    
+    # Make the wrapper executable
+    docker exec jenkins chmod +x /usr/local/bin/sonar-scanner-docker
+    
+    echo "✅ SonarQube Scanner Docker wrapper created at /usr/local/bin/sonar-scanner-docker"
+else
+    echo "❌ Failed to pull SonarQube Scanner Docker image"
+fi
+
+# Also install npm sonar-scanner as fallback
+echo "Installing npm sonar-scanner as fallback..."
+docker exec jenkins npm install -g sonar-scanner
+
+# Verify installations
+echo "Verifying SonarQube Scanner installations..."
+DOCKER_SCANNER=$(docker exec jenkins test -f /usr/local/bin/sonar-scanner-docker && echo "Available" || echo "Not found")
+NPM_SCANNER=$(docker exec jenkins npm list -g sonar-scanner >/dev/null 2>&1 && echo "Available" || echo "Not found")
+
+echo "SonarQube Scanner Docker: $DOCKER_SCANNER"
+echo "SonarQube Scanner NPM: $NPM_SCANNER"
+
+if [[ "$DOCKER_SCANNER" == "Available" || "$NPM_SCANNER" == "Available" ]]; then
+  echo "✅ SonarQube Scanner successfully configured in Jenkins container"
+else
+  echo "❌ SonarQube Scanner installation failed"
+fi
+
+# Copy SonarQube credentials to Jenkins container
+echo "Setting up SonarQube integration credentials..."
+docker exec jenkins mkdir -p /var/jenkins_home/.sonarqube
+docker exec jenkins bash -c 'echo "SONAR_HOST_URL=http://localhost:9000" > /var/jenkins_home/.sonarqube/config'
+docker exec jenkins bash -c 'echo "SONAR_LOGIN=admin" >> /var/jenkins_home/.sonarqube/config'
+docker exec jenkins bash -c 'echo "SONAR_PASSWORD=admin" >> /var/jenkins_home/.sonarqube/config'
+echo "✅ SonarQube credentials configured for Jenkins"
+
 # Check Jenkins status
 echo "=== Jenkins Installation Status ==="
 echo "Jenkins is running on: http://localhost:8080"

@@ -101,6 +101,80 @@ else
   echo "Go to http://localhost:9000 -> Administration -> Security -> Users -> Tokens"
 fi
 
+# Create Group6-react-app project automatically
+echo "=== Creating Group6-react-app Project ==="
+PROJECT_KEY="group6-react-app"
+PROJECT_NAME="Group 6 React Application"
+
+# Wait for SonarQube API to be fully ready for project creation
+echo "Waiting for SonarQube API to be ready for project operations..."
+sleep 20
+
+# Function to check if project exists
+check_project_exists() {
+  local project_key=$1
+  local exists_count=$(curl -s -u admin:admin "http://localhost:9000/api/projects/search?q=${project_key}" 2>/dev/null | grep -c "\"key\":\"${project_key}\"" || echo "0")
+  echo $exists_count
+}
+
+# Check if project already exists
+echo "Checking if project '${PROJECT_KEY}' already exists..."
+PROJECT_EXISTS=$(check_project_exists "$PROJECT_KEY")
+
+if [ "$PROJECT_EXISTS" -eq "0" ]; then
+  echo "Creating new SonarQube project: ${PROJECT_NAME}"
+  
+  # Create the project
+  CREATE_RESULT=$(curl -s -u admin:admin -X POST "http://localhost:9000/api/projects/create" \
+    -d "project=${PROJECT_KEY}" \
+    -d "name=${PROJECT_NAME}" \
+    -d "visibility=private" 2>/dev/null)
+  
+  # Wait a moment for project to be created
+  sleep 5
+  
+  # Verify project creation
+  VERIFY_EXISTS=$(check_project_exists "$PROJECT_KEY")
+  
+  if [ "$VERIFY_EXISTS" -gt "0" ]; then
+    echo "✅ Project '${PROJECT_NAME}' created successfully!"
+    echo "   Project Key: ${PROJECT_KEY}"
+    echo "   Access at: http://localhost:9000/dashboard?id=${PROJECT_KEY}"
+    
+    # Set up quality gate (use default quality gate)
+    echo "Configuring quality gate for project..."
+    curl -s -u admin:admin -X POST "http://localhost:9000/api/qualitygates/select" \
+      -d "projectKey=${PROJECT_KEY}" \
+      -d "gateId=1" >/dev/null 2>&1
+    
+    echo "✅ Quality gate configured for project"
+    
+    # Save project info
+    echo "PROJECT_KEY=${PROJECT_KEY}" > /opt/sonarqube/group6-react-app-info.txt
+    echo "PROJECT_NAME=${PROJECT_NAME}" >> /opt/sonarqube/group6-react-app-info.txt
+    echo "PROJECT_URL=http://localhost:9000/dashboard?id=${PROJECT_KEY}" >> /opt/sonarqube/group6-react-app-info.txt
+    echo "📁 Project info saved to: /opt/sonarqube/group6-react-app-info.txt"
+    
+  else
+    echo "❌ Failed to create project. API Response: $CREATE_RESULT"
+    echo "⚠️  You may need to create the project manually at: http://localhost:9000"
+  fi
+else
+  echo "✅ Project '${PROJECT_NAME}' already exists (found ${PROJECT_EXISTS} matches)"
+  echo "   Project Key: ${PROJECT_KEY}"
+  echo "   Access at: http://localhost:9000/dashboard?id=${PROJECT_KEY}"
+fi
+
+# Final verification
+echo "=== Project Setup Verification ==="
+FINAL_CHECK=$(curl -s -u admin:admin "http://localhost:9000/api/projects/show?project=${PROJECT_KEY}" 2>/dev/null)
+if echo "$FINAL_CHECK" | grep -q "\"key\":\"${PROJECT_KEY}\""; then
+  echo "✅ Project verification successful - ready for Jenkins integration"
+  echo "📊 SonarQube project '${PROJECT_KEY}' is ready for code analysis"
+else
+  echo "⚠️  Project verification inconclusive - check manually at http://localhost:9000"
+fi
+
 # Display SonarQube logs for verification
 echo "Recent SonarQube logs:"
 docker logs sonarqube --tail 20

@@ -21,15 +21,20 @@ data "aws_vpc" "default" {
   default = true
 }
 
-# Get default subnet
-data "aws_subnet" "default" {
-  vpc_id            = data.aws_vpc.default.id
-  availability_zone = "${var.region}a"
-  default_for_az    = true
+# Get available subnets and select the first one
+data "aws_subnets" "default" {
   filter {
-    name   = "availability-zone"
-    values = ["${var.region}a"]
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
   }
+  filter {
+    name   = "default-for-az"
+    values = ["true"]
+  }
+}
+
+data "aws_subnet" "default" {
+  id = data.aws_subnets.default.ids[0]
 }
 
 # Create a security group for DevOps tools
@@ -86,26 +91,26 @@ resource "aws_security_group" "devops_sg" {
     cidr_blocks = var.allowed_cidr_blocks
   }
 
-  # Elasticsearch port
+  # Elasticsearch port (changed from 9200 to 10100)
   ingress {
-    from_port   = 9200
-    to_port     = 9200
+    from_port   = 10100
+    to_port     = 10100
     protocol    = "tcp"
     cidr_blocks = var.allowed_cidr_blocks
   }
 
-  # Kibana port
+  # Kibana port (changed from 5601 to 10101)
   ingress {
-    from_port   = 5601
-    to_port     = 5601
+    from_port   = 10101
+    to_port     = 10101
     protocol    = "tcp"
     cidr_blocks = var.allowed_cidr_blocks
   }
 
-  # Logstash port
+  # Logstash port (changed from 5044 to 15000)
   ingress {
-    from_port   = 5044
-    to_port     = 5044
+    from_port   = 15000
+    to_port     = 15000
     protocol    = "tcp"
     cidr_blocks = var.allowed_cidr_blocks
   }
@@ -178,11 +183,15 @@ resource "aws_instance" "devops_instance" {
       "echo '=== Starting System Update ==='",
       "sudo yum update -y",
       "echo '=== Installing Required Packages ==='",
-      "sudo yum install -y curl wget git unzip docker jq",
+      "sudo yum install -y curl wget git unzip jq",
+      "echo '=== Installing Docker ==='",
+      "sudo amazon-linux-extras install docker -y || sudo yum install -y docker",
       "echo '=== Setting up Docker ==='",
       "sudo systemctl start docker",
       "sudo systemctl enable docker",
       "sudo usermod -a -G docker ec2-user",
+      "echo '=== Verifying Docker Installation ==='",
+      "sudo systemctl status docker --no-pager",
       "echo '=== Installing Docker Compose ==='",
       "sudo curl -L \"https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)\" -o /usr/local/bin/docker-compose",
       "sudo chmod +x /usr/local/bin/docker-compose",
@@ -191,7 +200,9 @@ resource "aws_instance" "devops_instance" {
       "sudo chown -R ec2-user:ec2-user /opt/devops/",
       "echo '=== Basic setup completed! ==='",
       "docker --version",
-      "docker-compose --version"
+      "docker-compose --version",
+      "echo '=== Docker group membership (will take effect after re-login) ==='",
+      "groups ec2-user"
     ]
   }
 
@@ -236,12 +247,28 @@ resource "aws_instance" "devops_instance" {
     destination = "/opt/devops/scripts/deployment-to-tomcat.sh"
   }
 
+  provisioner "file" {
+    source      = "${path.module}/integration-tests.sh"
+    destination = "/opt/devops/scripts/integration-tests.sh"
+  }
+
   # Make scripts executable
   provisioner "remote-exec" {
     inline = [
       "echo '=== Making scripts executable ==='",
-      "chmod +x /opt/devops/scripts/*.sh",
-      "ls -la /opt/devops/scripts/"
+      "chmod +x /opt/devops/scripts/install-elk.sh",
+      "chmod +x /opt/devops/scripts/install-jenkins.sh",
+      "chmod +x /opt/devops/scripts/install-sonarqube.sh",
+      "chmod +x /opt/devops/scripts/install-tomcat.sh",
+      "chmod +x /opt/devops/scripts/automated-creation-of-job.sh",
+      "chmod +x /opt/devops/scripts/Github-integration-with-jenkins.sh",
+      "chmod +x /opt/devops/scripts/jenkins-integration-with-sonarqube.sh",
+      "chmod +x /opt/devops/scripts/deployment-to-tomcat.sh",
+      "chmod +x /opt/devops/scripts/integration-tests.sh",
+      "echo '=== Verifying script permissions ==='",
+      "ls -la /opt/devops/scripts/",
+      "echo '=== All scripts are now executable ==='",
+      "file /opt/devops/scripts/*.sh"
     ]
   }
 
@@ -250,6 +277,8 @@ resource "aws_instance" "devops_instance" {
     inline = [
       "echo '=== Starting ELK Stack Installation ==='",
       "cd /opt/devops/scripts",
+      "export KIBANA_USERNAME='${var.kibana_username}'",
+      "export KIBANA_PASSWORD='${var.kibana_password}'",
       "./install-elk.sh 2>&1 | tee /opt/devops/logs/elk-install.log",
       "echo '=== ELK Stack Installation Completed ==='",
       "echo 'Waiting for ELK services to stabilize...'",
@@ -302,7 +331,7 @@ resource "aws_instance" "devops_instance" {
       "echo ''",
       "echo 'Health Checks:'",
       "echo -n 'Elasticsearch: '",
-      "curl -s http://localhost:9200/_cluster/health | jq -r '.status' || echo 'Not ready'",
+      "curl -s http://localhost:10100/_cluster/health | jq -r '.status' || echo 'Not ready'",
       "echo -n 'Jenkins: '", 
       "curl -s -I http://localhost:8080 | head -n 1 | cut -d' ' -f2 || echo 'Not ready'",
       "echo -n 'SonarQube: '",
@@ -310,7 +339,7 @@ resource "aws_instance" "devops_instance" {
       "echo -n 'Tomcat: '",
       "curl -s -I http://localhost:8081 | head -n 1 | cut -d' ' -f2 || echo 'Not ready'",
       "echo -n 'Kibana: '",
-      "curl -s -I http://localhost:5601 | head -n 1 | cut -d' ' -f2 || echo 'Not ready'"
+      "curl -s -I http://localhost:10101 | head -n 1 | cut -d' ' -f2 || echo 'Not ready'"
     ]
   }
 
@@ -346,6 +375,63 @@ resource "aws_instance" "devops_instance" {
     ]
   }
 
+  # Copy React App and run integration tests
+  provisioner "file" {
+    source      = "${path.module}/group6-react-app"
+    destination = "/home/ec2-user/"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "echo '=== Setting up React App Integration ==='",
+      "cd /home/ec2-user",
+      "sudo chown -R ec2-user:ec2-user group6-react-app/",
+      "chmod +x group6-react-app/deploy.sh 2>/dev/null || true",
+      "chmod +x group6-react-app/deploy-enhanced.sh 2>/dev/null || true",
+      "echo '=== React App Files Copied Successfully ==='",
+      "ls -la group6-react-app/",
+      "echo '=== Running Integration Tests ==='",
+      "cd /opt/devops/scripts",
+      "./integration-tests.sh 2>&1 | tee /opt/devops/logs/integration-tests.log",
+      "echo '=== Integration Tests Completed ==='",
+      "sleep 10"
+    ]
+  }
+
+  # Copy and setup monitoring script
+  provisioner "file" {
+    source      = "${path.module}/configure-monitoring.sh"
+    destination = "/opt/devops/scripts/configure-monitoring.sh"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "echo '=== Setting up Basic Monitoring ==='",
+      "cd /opt/devops/scripts",
+      "chmod +x configure-monitoring.sh",
+      "./configure-monitoring.sh 2>&1 | tee /opt/devops/logs/monitoring-setup.log",
+      "echo '=== Basic Monitoring Setup Completed ==='",
+      "sleep 10"
+    ]
+  }
+
+  # Copy and setup sample pipeline script
+  provisioner "file" {
+    source      = "${path.module}/sample-pipeline.sh"
+    destination = "/opt/devops/scripts/sample-pipeline.sh"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "echo '=== Setting up Sample CI/CD Pipeline Workflows ==='",
+      "cd /opt/devops/scripts",
+      "chmod +x sample-pipeline.sh",
+      "./sample-pipeline.sh 2>&1 | tee /opt/devops/logs/sample-pipeline-setup.log",
+      "echo '=== Sample Pipeline Workflows Setup Completed ==='",
+      "sleep 10"
+    ]
+  }
+
   # Final verification and summary
   provisioner "remote-exec" {
     inline = [
@@ -355,26 +441,46 @@ resource "aws_instance" "devops_instance" {
       "echo 'Environment: ${var.environment}'", 
       "echo 'Project: ${var.project_name}'",
       "echo ''",
+      "echo 'DevOps Scripts Deployed:'",
+      "echo '1. integration-tests.sh - Foundation validation'",
+      "echo '2. setup-elk-logging.sh - ELK logging integration'", 
+      "echo '3. configure-monitoring.sh - Basic monitoring setup'",
+      "echo '4. sample-pipeline.sh - Complete CI/CD workflows'",
+      "echo ''",
       "echo 'Service URLs:'",
       "PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)",
       "echo \"Jenkins: http://$PUBLIC_IP:8080\"",
       "echo \"SonarQube: http://$PUBLIC_IP:9000\"",
-      "echo \"Kibana: http://$PUBLIC_IP:5601\"", 
+      "echo \"Kibana: http://$PUBLIC_IP:10101\"", 
       "echo \"Tomcat: http://$PUBLIC_IP:8081\"",
-      "echo \"Elasticsearch: http://$PUBLIC_IP:9200\"",
+      "echo \"Elasticsearch: http://$PUBLIC_IP:10100\"",
+      "echo ''",
+      "echo 'Interactive Dashboards:'",
+      "echo \"Pipeline Dashboard: sudo /opt/pipeline-samples/demos/pipeline-dashboard.sh\"",
+      "echo \"Monitoring Dashboard: sudo /opt/monitoring/scripts/show-metrics-dashboard.sh\"",
       "echo ''",
       "echo 'Default Credentials:'",
       "echo 'Jenkins: admin / (check /opt/jenkins/initial-password.txt)'",
       "echo 'SonarQube: admin / admin'",
       "echo 'Tomcat Manager: admin / admin123'",
+      "echo 'Elasticsearch: elastic / elastic123'",
+      "echo 'Kibana: ${var.kibana_username} / ${var.kibana_password}'",
+      "echo ''",
+      "echo 'Quick Start Commands:'",
+      "echo 'View Pipeline Dashboard: sudo /opt/pipeline-samples/demos/pipeline-dashboard.sh'",
+      "echo 'Run Complete Pipeline: sudo /opt/pipeline-samples/workflows/pipeline-orchestrator.sh'",
+      "echo 'View Monitoring: sudo /opt/monitoring/scripts/show-metrics-dashboard.sh'",
       "echo ''",
       "echo 'Installation logs available in: /opt/devops/logs/'",
       "echo 'Scripts available in: /opt/devops/scripts/'",
+      "echo 'React App available at: /home/ec2-user/group6-react-app/'",
+      "echo 'Pipeline samples available at: /opt/pipeline-samples/'",
+      "echo 'Access guides: /tmp/complete-pipeline-access.txt'",
       "echo ''",
       "echo 'Final container status:'",
       "docker ps --format 'table {{.Names}}\\t{{.Status}}\\t{{.Ports}}'",
       "echo ''",
-      "echo '🎉 DevOps CI/CD Pipeline is ready! 🎉'"
+      "echo '🎉 Complete DevOps CI/CD Pipeline with 4 Scripts Ready! 🎉'"
     ]
   }
 }
@@ -407,10 +513,15 @@ output "sonarqube_url" {
 
 output "kibana_url" {
   description = "Kibana URL"
-  value       = "http://${aws_instance.devops_instance.public_ip}:5601"
+  value       = "http://${aws_instance.devops_instance.public_ip}:10101"
 }
 
 output "tomcat_url" {
   description = "Tomcat URL"
   value       = "http://${aws_instance.devops_instance.public_ip}:8081"
+}
+
+output "elasticsearch_url" {
+  description = "Elasticsearch URL"
+  value       = "http://${aws_instance.devops_instance.public_ip}:10100"
 }
