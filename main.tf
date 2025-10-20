@@ -228,28 +228,18 @@ resource "aws_instance" "devops_instance" {
   }
 
   provisioner "file" {
-    source      = "${path.module}/automated-creation-of-job.sh"
-    destination = "/opt/devops/scripts/automated-creation-of-job.sh"
-  }
-
-  provisioner "file" {
-    source      = "${path.module}/Github-integration-with-jenkins.sh"
-    destination = "/opt/devops/scripts/Github-integration-with-jenkins.sh"
-  }
-
-  provisioner "file" {
-    source      = "${path.module}/jenkins-integration-with-sonarqube.sh"
-    destination = "/opt/devops/scripts/jenkins-integration-with-sonarqube.sh"
-  }
-
-  provisioner "file" {
-    source      = "${path.module}/deployment-to-tomcat.sh"
-    destination = "/opt/devops/scripts/deployment-to-tomcat.sh"
+    source      = "${path.module}/create-jenkins-jobs.sh"
+    destination = "/opt/devops/scripts/create-jenkins-jobs.sh"
   }
 
   provisioner "file" {
     source      = "${path.module}/integration-tests.sh"
     destination = "/opt/devops/scripts/integration-tests.sh"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/install-jira-integration.sh"
+    destination = "/opt/devops/scripts/install-jira-integration.sh"
   }
 
   # Make scripts executable
@@ -260,11 +250,9 @@ resource "aws_instance" "devops_instance" {
       "chmod +x /opt/devops/scripts/install-jenkins.sh",
       "chmod +x /opt/devops/scripts/install-sonarqube.sh",
       "chmod +x /opt/devops/scripts/install-tomcat.sh",
-      "chmod +x /opt/devops/scripts/automated-creation-of-job.sh",
-      "chmod +x /opt/devops/scripts/Github-integration-with-jenkins.sh",
-      "chmod +x /opt/devops/scripts/jenkins-integration-with-sonarqube.sh",
-      "chmod +x /opt/devops/scripts/deployment-to-tomcat.sh",
+      "chmod +x /opt/devops/scripts/create-jenkins-jobs.sh",
       "chmod +x /opt/devops/scripts/integration-tests.sh",
+      "chmod +x /opt/devops/scripts/install-jira-integration.sh",
       "echo '=== Verifying script permissions ==='",
       "ls -la /opt/devops/scripts/",
       "echo '=== All scripts are now executable ==='",
@@ -350,30 +338,15 @@ resource "aws_instance" "devops_instance" {
       "cd /opt/devops/scripts",
       "echo 'Waiting additional time for Jenkins to be fully ready...'",
       "sleep 60",
-      "./automated-creation-of-job.sh 2>&1 | tee /opt/devops/logs/jenkins-jobs.log",
+      "./create-jenkins-jobs.sh 2>&1 | tee /opt/devops/logs/jenkins-jobs.log",
       "echo '=== Jenkins Jobs Setup Completed ==='",
       "sleep 15"
     ]
   }
 
-  # Setup integrations
-  provisioner "remote-exec" {
-    inline = [
-      "echo '=== Setting up GitHub Integration ==='",
-      "cd /opt/devops/scripts",
-      "./Github-integration-with-jenkins.sh 2>&1 | tee /opt/devops/logs/github-integration.log",
-      "echo '=== GitHub Integration Completed ==='",
-      "sleep 15",
-      "echo '=== Setting up SonarQube Integration ==='",
-      "./jenkins-integration-with-sonarqube.sh 2>&1 | tee /opt/devops/logs/sonarqube-integration.log", 
-      "echo '=== SonarQube Integration Completed ==='",
-      "sleep 15",
-      "echo '=== Setting up Tomcat Deployment ==='",
-      "./deployment-to-tomcat.sh 2>&1 | tee /opt/devops/logs/tomcat-deployment.log",
-      "echo '=== Tomcat Deployment Setup Completed ==='",
-      "sleep 15"
-    ]
-  }
+  # Note: Additional integrations can be set up manually after deployment
+  # GitHub integration, SonarQube advanced configuration, and deployment scripts
+  # can be configured through the respective web interfaces
 
   # Copy React App and run integration tests
   provisioner "file" {
@@ -432,6 +405,17 @@ resource "aws_instance" "devops_instance" {
     ]
   }
 
+  # Install Jira Integration
+  provisioner "remote-exec" {
+    inline = [
+      "echo '=== Setting up Jira Integration ==='",
+      "cd /opt/devops/scripts",
+      "./install-jira-integration.sh 2>&1 | tee /opt/devops/logs/jira-integration-setup.log",
+      "echo '=== Jira Integration Setup Completed ==='",
+      "sleep 30"
+    ]
+  }
+
   # Final verification and summary
   provisioner "remote-exec" {
     inline = [
@@ -446,6 +430,7 @@ resource "aws_instance" "devops_instance" {
       "echo '2. setup-elk-logging.sh - ELK logging integration'", 
       "echo '3. configure-monitoring.sh - Basic monitoring setup'",
       "echo '4. sample-pipeline.sh - Complete CI/CD workflows'",
+      "echo '5. install-jira-integration.sh - Jira project management integration'",
       "echo ''",
       "echo 'Service URLs:'",
       "PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)",
@@ -454,6 +439,7 @@ resource "aws_instance" "devops_instance" {
       "echo \"Kibana: http://$PUBLIC_IP:10101\"", 
       "echo \"Tomcat: http://$PUBLIC_IP:8081\"",
       "echo \"Elasticsearch: http://$PUBLIC_IP:10100\"",
+      "echo \"Jira: External instance (configured during deployment)\"",
       "echo ''",
       "echo 'Interactive Dashboards:'",
       "echo \"Pipeline Dashboard: sudo /opt/pipeline-samples/demos/pipeline-dashboard.sh\"",
@@ -526,6 +512,11 @@ output "elasticsearch_url" {
   value       = "http://${aws_instance.devops_instance.public_ip}:10100"
 }
 
+output "jira_url" {
+  description = "External Jira URL (user provided)"
+  value       = "External Jira - URL configured during deployment"
+}
+
 # Credentials Output
 output "jenkins_credentials" {
   description = "Jenkins login credentials"
@@ -571,6 +562,17 @@ output "elasticsearch_credentials" {
   sensitive = false
 }
 
+output "jira_credentials" {
+  description = "External Jira integration info"
+  value = {
+    type     = "External Jira Integration"
+    note     = "Uses existing Jira instance with API token authentication"
+    setup    = "Configuration completed during deployment"
+    config   = "/opt/jira-integration/config/jira.env"
+  }
+  sensitive = false
+}
+
 output "deployment_summary" {
   description = "Complete deployment summary with all access information"
   value = {
@@ -604,6 +606,11 @@ output "deployment_summary" {
       tomcat = {
         url  = "http://${aws_instance.devops_instance.public_ip}:8081"
         note = "No authentication required for Tomcat web interface"
+      }
+      jira = {
+        type     = "External Integration"
+        note     = "Uses existing Jira instance - configured during deployment"
+        config   = "/opt/jira-integration/config/jira.env"
       }
     }
     next_steps = [

@@ -72,7 +72,64 @@ Before deploying, ensure you have:
 - Security Groups management
 - Key Pair access
 
-## 🚀 Quick Start
+## 🚀 One-Command Deployment
+
+### Complete Pipeline Setup (Recommended)
+
+**Windows Users:**
+```cmd
+deploy-complete.bat
+```
+
+**Linux/Mac Users:**
+```bash
+./deploy-complete-pipeline.sh
+```
+
+That's it! ✨ This single command will:
+- ✅ Deploy AWS infrastructure
+- ✅ Install all DevOps tools (Jenkins, SonarQube, ELK Stack, Tomcat)
+- ✅ Configure integrations between all tools
+- ✅ Set up JIRA integration (optional)
+- ✅ Run integration tests
+- ✅ Provide complete access information
+
+**Estimated time:** 15-20 minutes
+
+### What Gets Deployed
+
+The one-command deployment includes:
+
+#### Infrastructure (via Terraform)
+- ✅ EC2 instance (t3.2xlarge) with optimized configuration
+- ✅ Security groups with all required ports
+- ✅ Public IP assignment for external access
+
+#### DevOps Tools (Containerized)
+- ✅ **Jenkins** (port 8080) - CI/CD automation server
+- ✅ **SonarQube** (port 9000) - Code quality and security analysis
+- ✅ **Elasticsearch** (port 10100) - Search and analytics engine
+- ✅ **Kibana** (port 10101) - Data visualization dashboard
+- ✅ **Logstash** (port 5000/15000) - Log processing pipeline
+- ✅ **Tomcat** (port 8081) - Application deployment server
+- ✅ **PostgreSQL** - SonarQube database
+
+#### Complete Integration Setup
+- ✅ Jenkins ↔ SonarQube pipeline integration
+- ✅ Jenkins ↔ Tomcat deployment automation
+- ✅ ELK Stack log aggregation from all services
+- ✅ GitHub webhook configuration (manual step)
+- ✅ JIRA integration for issue tracking (optional)
+
+#### Testing & Verification
+- ✅ Comprehensive integration tests
+- ✅ Service health monitoring
+- ✅ Performance optimization
+- ✅ Security configuration
+
+### Manual Step-by-Step (Advanced Users)
+
+If you prefer manual control:
 
 ### 1. Clone and Configure
 
